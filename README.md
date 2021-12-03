@@ -13,7 +13,9 @@ It needs to run on every AP / Router (host) on your wifi network. AP's and Route
 
 What does it do?
 
-* Communicates to other interhapd running on other hosts on the network
+* Communicates to other interhapd running on other hosts on the network.
+* Send hostapd command to any interface on any host from script.
+* Receive all events from hostapd from any interface from any host inscript.
 * A web-interface on port 11112.
 * It builds the neighborhood (rrm_neighbor_report SET_NEIGHBOR) on every wifi interface.
 * Keeps track of all stations on the entire network.
