@@ -872,13 +872,13 @@ int main(int argc, char *argv[])
 
   while (should_exit == false)
   {
-    switch (epoll_wait(epollfd, &rtev, 1, 1000)) { // the only place in the code we wait
+    switch (epoll_wait(epollfd, &rtev, 1, 1000)) { // the only place in the code we wait 1 second
       case -1: // epoll_wait failed
         continue;
       case 0:  // epoll_wait timeout
-        if (timeoutcnt++ >= 3600) {
+        if (timeoutcnt++ >= 600) { // 10 minutes
           timeoutcnt = 0;
-          debugprintf(2,"Timeout 1 hour\n");
+          debugprintf(2,"Timeout 10 minutes\n");
           for (addr_node_t *a = threadlist; a; a = a->next) {
             switch (a->type) {
               case NODE_LOCALIP:
