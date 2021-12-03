@@ -1,0 +1,4 @@
+# Default settings for interhapd - Inter-connecting hostapd daemon
+
+INTERHAPD_OPTS=-d 1 -p 11111 -h /run/hostapd -s ./interhapd.py
+INTERHAPD_INTERFACES=brlan

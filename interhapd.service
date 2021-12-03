@@ -1,0 +1,13 @@
+[Unit]
+Description=Inter-connecting hostapd daemon
+Before=network.target hostapd.service
+Wants=network.target hostapd.service
+
+[Service]
+EnvironmentFile=-/etc/default/interhapd
+WorkingDirectory=/usr/local/sbin/
+Type=notify
+ExecStart=/usr/local/sbin/interhapd $INTERHAPD_OPTS $INTERHAPD_INTERFACES
+
+[Install]
+WantedBy=hostapd.service
