@@ -7,17 +7,20 @@ import socket
 import sys
 import signal
 import datetime
+import binascii
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 hostname = socket.gethostname()
 remotehostsD = {}
 interfacesD = {}
 neighborsD = {}
+beaconrespD = {}
 stationsD = {}
 threadsD = {}
 webservers = [] 
 webserverPort = 11112
 scriptexiting = False
+beaconfilterssid = False
 
 class MyHTTPServer(HTTPServer):
     def __init__(self, server_address, RequestHandlerClass, thread):
@@ -68,15 +71,23 @@ class MyServer(BaseHTTPRequestHandler):
       if self.path == "/n":
          footer = "Neighbors: %s" % neighborsD
          title = "Neighborhood"
-         table = self.dict2table(neighborsD, ("host", "sock", "ascii_ssid", "key"), ("host", "sock", "ssid", "bssid"))
+         table = self.dict2table(neighborsD, ("host", "sock", "ascii_ssid", "key"), \
+                                             ("host", "sock", "ssid",       "bssid"))
       elif self.path == "/s":
          footer = "Stations: %s" % stationsD
          title = "Stations"
-         table = self.dict2table(stationsD, ("key", "host", "sock"), ("bssid", "host", "sock"))
+         table = self.dict2table(stationsD, ("key", "host", "sock"), \
+                                          ("bssid", "host", "sock"))
+      elif self.path == "/b":
+         footer = "Beacons: %s" % beaconrespD
+         title = "Beacons"
+         table = self.dict2table(beaconrespD, ("ssid", "rssi", "station_bssid", "neighbor_bssid"), \
+                                              ("ssid", "rssi", "station bssid", "neighbor bssid"))
       elif self.path == "/i":
          footer = "Interfaces: %s" % interfacesD
          title = "Interfaces"
-         table = self.dict2table(interfacesD, ("key", "ssid", "bssid"), ("interface", "ssid", "bssid"))
+         table = self.dict2table(interfacesD, ("key", "ssid", "bssid"), \
+                                        ("interface", "ssid", "bssid"))
       elif self.path.startswith("/t"):
          stalist = ["key"]
          staname = ["Station bssid"]
@@ -95,7 +106,7 @@ class MyServer(BaseHTTPRequestHandler):
          if path.startswith( "?tm-" ):
             tm = path[4:].split("-")
 #            bss_tm_req AA:AA:AA:AA:AA:AA neighbor=-BB:BB:BB:BB:BB:BB abridged=1
-            com = "BSS_TM_REQ %s neighbor=%s abridged=1" %(tm[2], tm[3])
+            com = "BSS_TM_REQ %s neighbor=%s,0x0000,81,7,7 abridged=1" %(tm[2], tm[3])
             eprint("TRANSISTION: %s\n%s" % (tm, com))
             il = self.server.thread.docommand(tm[0], tm[1], com)
             eprint("TRANSISTION RESPONSE: %s" % (il.remain))
@@ -112,6 +123,7 @@ class MyServer(BaseHTTPRequestHandler):
          <A style="font-size:40px;" HREF=s>Stations</A>
          <A style="font-size:40px;" HREF=n>Neighborhood</A>
          <A style="font-size:40px;" HREF=i>Interfaces</A>
+         <A style="font-size:40px;" HREF=b>Beacons</A>
          <A style="font-size:40px;" HREF=t>Transition</A>
          <h1 style="color:red;font-size:40px;">%s</h1>
          %s
@@ -141,6 +153,8 @@ def event(thread):
             threadsD[stations.__name__].signal(il)
          elif words[0] == "AP-STA-DISCONNECTED":
             threadsD[stations.__name__].signal(il)
+         elif words[0] == "BEACON-RESP-RX":
+            threadsD[beacons.__name__].signal(il)
       elif il.remain.startswith("INTERHAPD LISTENING STARTED"):
          thread.remotehost_add(il)
 #         eprint("REMOTEHOSTS: %s " %(remotehostsD))
@@ -165,6 +179,42 @@ def command(thread):
       if il.remain.startswith("SHOW_MY_NEIGHBOR"):
          thread.respond( il.fromhost, il.fromsock, thread.get_my_neighbors())
 
+# <3>BEACON-RESP-RX e0:cc:f8:57:68:60 64 00 51060000000000000000000002cb00aabbcc1573a8006bb78403
+#51060000000000000000000002bf00aabbcc1573a80038c5a303016495a1ba9f00000000640011140006574946493234010882848b960c1218240301060504000200002a010432043048606c30180100000fac040100000fac040200000fac02000fac040000460572000000003603e1cd013b0251007f080400080200000040
+
+def beacons(thread):
+# This thread is only sending commands
+   while  True:
+      il = thread.wait(3)  # Wait for signal from event thread
+      if il != None: # Wait was interupted by a signal from other thread
+#         eprint(il.remain)
+         words = il.remain.split(" ")
+         if len(words[4]) <= 84: continue
+         nbssid = words[4][30:32]+":"+words[4][32:34]+":"+words[4][34:36]+ \
+             ":"+words[4][36:38]+":"+words[4][38:40]+":"+words[4][40:42]
+         beaconrespD[words[1] +"-"+ nbssid] = { \
+            'rssi':int(words[4][26:28], 16), \
+            'ssid':binascii.unhexlify(words[4][84:84+(int(words[4][80:84],16)*2)]).decode(), \
+            'neighbor_bssid':nbssid , \
+            'station_bssid':words[1] , \
+         }
+      else: # Timed out
+#         eprint(beaconrespD)
+         beaconrespD.clear()
+         for sta, sdic in stationsD.items():
+            if sdic["host"] != hostname: continue# 
+            for interface, idic in interfacesD.items():
+               if sdic["sock"] != interface: continue
+               btype = 2
+               detail = 1
+               ssid = idic["ssid"]
+               com = "REQ_BEACON %s 510000000000%02xffffffffffff0201%02x" \
+                  %(sta, btype, detail )
+               if beaconfilterssid == True:
+                  com += "%04x" % len(ssid) + ssid.encode('utf-8').hex()
+#               eprint(com)
+               ill = thread.docommand( hostname, sdic["sock"], com)
+
 def stations(thread):
 # This thread is only sending commands
    while  True:
@@ -188,14 +238,15 @@ def stations(thread):
                if ill == None: break
 #            eprint("STATIONS: %s " %(stationsD))
          elif il.remain.startswith("INTERHAPD INTERFACE STOPPED"):
-            removed = True
-            while removed == True:
+            while True:
                removed = False
                for sta, dic in stationsD.items():
                   if stationsD[sta]["sock"] != il.fromsock: continue
                   stationsD.pop(sta, None)
                   thread.fakeeventall(il.fromsock, "event", "<3>AP-STA-DISCONNECTED %s" % sta)
                   removed = True
+                  break
+               if removed == False: break
 
 def neighborhood(thread):
 # This thread is only sending commands
@@ -234,8 +285,7 @@ def neighborhood(thread):
             if dic["bssid"] == words[0]: continue # Remove all but my own entry
             thread.docommand(hostname, interface, "REMOVE_NEIGHBOR " + words[0])
 # build up neigborhood on local interfacesD
-      removed = True
-      while removed == True:
+      while True:
          removed = False
          for host, hdic in remotehostsD.items():
             age = datetime.datetime.now() - hdic["lastseen"]
@@ -243,13 +293,14 @@ def neighborhood(thread):
             thread.remotehost_remove(host)
             removed = True
             break
+         if removed == False: break
       for host, hdic in remotehostsD.items():
          il = thread.docommand(host, "command", "SHOW_MY_NEIGHBOR")
          if il == None: continue
          thread.set_my_neighbors(il.remain)
       thread.set_my_neighbors(thread.get_my_neighbors())
 
-threadfunctionList = [event, command, stations, neighborhood, server]
+threadfunctionList = [event, command, stations, neighborhood, beacons, server]
 
 def main():
 # Initialisation
@@ -379,14 +430,14 @@ class myThread (threading.Thread):
          remotehostsD[il.fromhost]["lastseen"] = datetime.datetime.now()
    def remotehost_remove(self, host):
       remotehostsD.pop(host, None)
-      removed = True
-      while removed == True:
+      while True:
          removed = False
          for sta, dic in stationsD.items():
             if dic["host"] != host: continue 
             stationsD.pop(sta, None)
             removed = True
             break
+         if removed == False: break
    def add_station(self, sta, il):
       d = dict()
       d["host"] = il.fromhost
@@ -421,18 +472,13 @@ if __name__ == "__main__": main()
 #beacon_with_ssid = '51000000000002ffffffffffff02010000077373696452524d'
 
 # Passive beacon with wildcard BSSID
-#beacon_passive = '510b0000000000ffffffffffff020100'
+#beacon_passive =   '510b0000000000ffffffffffff020100'
 
 # Active beacon with wildcard BSSID
 #beacon_active = '510b0000000001ffffffffffff020100'
 
 # Passive beacon with duration set
 #beacon_passive_duration = '510b0000c80000ffffffffffff020100'
-
-# token = run_req_beacon(hapd, addr, "51000000000002ffffffffffff" + "0007" + binascii.hexlify(b"another").decode())
-
-# req_beacon e0:cc:f8:57:68:60 51000000000002ffffffffffff0201000006574946493234
-
 
 
 #hostapd_cli -i XXXX bss_tm_req AA:AA:AA:AA:AA:AA neighbor=-BB:BB:BB:BB:BB:BB abridged=1
