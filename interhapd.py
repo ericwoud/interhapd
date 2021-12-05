@@ -100,7 +100,12 @@ class MyServer(BaseHTTPRequestHandler):
            for n, ndic in neighborsD.items():
               if sdic["host"] == ndic["host"] and sdic["sock"] == ndic["sock"]:
                  dic[n] = "CONNECTED"
-              else: dic[n] = '''<A HREF=t?tm-%s-%s-%s-%s>MOVE</A>''' % (sdic["host"], sdic["sock"], s, n)
+              else:
+                 text = "MOVE"
+                 key = s + "-" + n
+                 if key in beaconrespD.keys(): text = beaconrespD[key]["rssi"]
+                 dic[n] = '''<A HREF=t?tm-%s-%s-%s-%s>%s</A>''' % \
+                    (sdic["host"], sdic["sock"], s, n, text)
            tdic[s] = dic
          path = self.path[2:]
          if path.startswith( "?tm-" ):
@@ -146,7 +151,7 @@ def event(thread):
    while  True:
       il = thread.getinput(None)
       if il == None: continue
-#      eprint("%s processing %s" % (thread.name, il.remain))
+#      eprint("%s processing %s-%s %s" % (thread.name, il.fromhost, il.fromsock, il.remain))
       if il.remain.startswith("<"):
          words = il.remain.lstrip("<").partition('>')[2].split()
          if   words[0] == "AP-STA-CONNECTED":
@@ -157,10 +162,10 @@ def event(thread):
             threadsD[beacons.__name__].signal(il)
       elif il.remain.startswith("INTERHAPD LISTENING STARTED"):
          thread.remotehost_add(il)
-#         eprint("REMOTEHOSTS: %s " %(remotehostsD))
+         eprint("REMOTEHOSTS: %s %s" %(remotehostsD, il.remain))
       elif il.remain.startswith("INTERHAPD LISTENING STOPPED"):
          thread.remotehost_remove(il.fromhost)
-#         eprint("REMOTEHOSTS: %s " %(remotehostsD))
+         eprint("REMOTEHOSTS: %s %s" %(remotehostsD, il.remain))
       elif il.remain.startswith("INTERHAPD INTERFACE STARTED"):
          threadsD[neighborhood.__name__].signal(il)
          threadsD[stations.__name__].signal(il)
@@ -290,7 +295,8 @@ def neighborhood(thread):
          for host, hdic in remotehostsD.items():
             age = datetime.datetime.now() - hdic["lastseen"]
             if age < datetime.timedelta(minutes = 10): continue
-            thread.remotehost_remove(host)
+##### FIX!!!
+#            thread.remotehost_remove(host)
             removed = True
             break
          if removed == False: break
@@ -421,6 +427,7 @@ class myThread (threading.Thread):
       self.sleepq.put(il)
       return
    def remotehost_add(self, il):
+#      eprint("ADD %s " % il.fromhost)
       if not il.fromhost in remotehostsD:
          for sta, dic in stationsD.items():
             if dic["host"] == hostname:
@@ -463,7 +470,7 @@ class myThread (threading.Thread):
             self.docommand(hostname, interface, "SET_NEIGHBOR " + self.set_my_neighbor(part[0], dic))
 
 if __name__ == "__main__": main()
-
+sys.exit()
 
 # Table beacon with wildcard BSSID
 # basic_beacon = '51000000000002ffffffffffff020100'
@@ -488,5 +495,16 @@ if __name__ == "__main__": main()
 #BB:BB... = The MAC of the access point you want to EXCLUDE from possible access points where it will roam to.
 
 # BSS_TM_REQ e0:cc:f8:57:68:60 neighbor=aa:bb:cc:d8:48:08,0x0000,81,7,7 abridged=1
+
+
+#int ieee802_11_parse_candidate_list(const char *pos, u8 *nei_rep,
+#				    size_t nei_rep_len)
+
+
+#	/*
+#	 * BSS Transition Candidate List Entries - Neighbor Report elements
+#	 * neighbor=<BSSID>,<BSSID Information>,<Operating Class>,
+#	 * <Channel Number>,<PHY Type>[,<hexdump of Optional Subelements>]
+#	 */
 
 
