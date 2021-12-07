@@ -27,6 +27,67 @@ class MyHTTPServer(HTTPServer):
         HTTPServer.__init__(self, server_address, RequestHandlerClass)
         self.thread = thread
 
+#table { border-collapse: collapse;}
+
+#td { text-align: center; border: 2px solid #000000; border-style: solid; font-size: 20px; }
+
+htmlstyle = """<style>
+table {
+  font-family: arial, sans-serif;
+  border-collapse: collapse;
+  width: 100%;
+}
+
+td, th {
+  text-align: left;
+  padding: 8px;
+  font-size: 20px;
+}
+
+tr:nth-child(even), thead {
+  background-color: #dddddd;
+}
+
+table, tr, td, thead {
+  border:none;
+  vertical-align: middle;
+}
+
+ul {
+  list-style-type: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: #333;
+}
+
+li {
+  float: left;
+  font-size:20px;
+}
+
+li a {
+  display: block;
+  color: white;
+  text-align: center;
+  padding: 14px 16px;
+  text-decoration: none;
+  border-right: 3px solid #bbb;
+}
+li:last-child {
+  border-right: none;
+}
+
+li a:hover:not(.active) {
+  background-color: #111;
+}
+
+.active {
+  background-color: #04AA6D;
+}
+</style>
+"""
+
 class MyServer(BaseHTTPRequestHandler):
    def log_message(self, format, *args):
       return
@@ -34,6 +95,14 @@ class MyServer(BaseHTTPRequestHandler):
       self.wfile.write(bytes(line, "utf-8"))
    def htmllinep(self, line):
       self.wfile.write(bytes("<p>%s</p>" % line, "utf-8"))
+   def htmlnavbar(self, tup, tup2, path):
+      st = "<ul>"
+      i = 0
+      for item in tup: 
+         cl = "active" if path.startswith(tup2[i]) else "inactive"
+         st +="""<li><a class="%s" href="%s">%s</a></li>""" % (cl, tup2[i], item)
+         i +=1
+      return st + "</ul>"
    def dict2table(self, dic, tup, tup2):
       table = '''<table width="100%" border="5px">\n'''
       table += "<thead>\n"
@@ -52,40 +121,20 @@ class MyServer(BaseHTTPRequestHandler):
       table += "</table>\n"
       return table
    def do_GET(self):
-      self.send_response(200)
-      self.send_header("Content-type", "text/html")
-      self.end_headers()
-      self.htmlline("")
-      self.htmlline('''
-         <html>
-         <head>
-           <title>interhapd web interface</title>
-           <meta http-equiv="refresh" content="5;url=%s">
-           <style type="text/css">
-             table { border-collapse: collapse;}
-             td { text-align: center; border: 2px solid #000000; border-style: solid; font-size: 20px; }
-           </style>
-         </head>
-         ''' % self.path[0:2])
-#      self.htmllinep("<head></head>")
       if self.path == "/n":
          footer = "Neighbors: %s" % neighborsD
-         title = "Neighborhood"
          table = self.dict2table(neighborsD, ("host", "sock", "ascii_ssid", "key"), \
                                              ("host", "sock", "ssid",       "bssid"))
       elif self.path == "/s":
          footer = "Stations: %s" % stationsD
-         title = "Stations"
          table = self.dict2table(stationsD, ("key", "host", "sock"), \
                                           ("bssid", "host", "sock"))
       elif self.path == "/b":
          footer = "Beacons: %s" % beaconrespD
-         title = "Beacons"
          table = self.dict2table(beaconrespD, ("ssid", "rssi", "station_bssid", "neighbor_bssid"), \
                                               ("ssid", "rssi", "station bssid", "neighbor bssid"))
       elif self.path == "/i":
          footer = "Interfaces: %s" % interfacesD
-         title = "Interfaces"
          table = self.dict2table(interfacesD, ("key", "ssid", "bssid"), \
                                         ("interface", "ssid", "bssid"))
       elif self.path.startswith("/t"):
@@ -116,35 +165,58 @@ class MyServer(BaseHTTPRequestHandler):
             il = self.server.thread.docommand(tm[0], tm[1], com)
             eprint("TRANSISTION RESPONSE: %s" % (il.remain))
 
-         title = "Transistion"
          table = self.dict2table(tdic, stalist, staname)
          footer = "Transistion: %s" % tdic
       else:
          footer= ""
-         title = "Empty"
          table = ""
+         testD = {
+            "test1": {'host':"testhost1",'sock':'testsock1'}, \
+            "test2": {'host':"testhost2",'sock':'testsock2'}, \
+            "test3": {'host':"testhost3",'sock':'testsock3'}, \
+            "test4": {'host':"testhost4",'sock':'testsock4'}, \
+         }
+
+         table = self.dict2table(testD, ("key", "host", "sock"), \
+                                          ("bssid", "host", "sock"))
+      navbar = self.htmlnavbar( \
+         ("Stations", "Neighborhood", "Interfaces", "Beacons", "Transition"), \
+         ("/s"       , "/n"           , "/i"         , "/b"      , "/t") , self.path)
+
+      self.send_response(200)
+      self.send_header("Content-type", "text/html")
+      self.end_headers()
+      self.htmlline("")
+      self.htmlline('''
+         <html>
+         <head>
+           <title>interhapd web interface</title>
+           <meta http-equiv="refresh" content="5;url=%s">
+           <style type="text/css"> %s </style>
+         </head>
+         ''' % ( self.path[0:2], htmlstyle))
+#      self.htmllinep("<head></head>")
       self.htmlline('''
          <body style="font-family:'Courier New', Courier, monospace;">
-         <A style="font-size:40px;" HREF=s>Stations</A>
-         <A style="font-size:40px;" HREF=n>Neighborhood</A>
-         <A style="font-size:40px;" HREF=i>Interfaces</A>
-         <A style="font-size:40px;" HREF=b>Beacons</A>
-         <A style="font-size:40px;" HREF=t>Transition</A>
-         <h1 style="color:red;font-size:40px;">%s</h1>
+         %s
          %s
          <p>%s</p>
          </body>
-         </html>''' % (title, table, footer))
+         </html>''' % (navbar, table, footer))
    
 
 def server(thread):
    eprint("Web Server started")
    server = MyHTTPServer(("", webserverPort), MyServer, thread)
    webservers.append(server)
-   server.serve_forever()
-   server.server_close()
-   webservers.remove(server)
-   eprint("Web Server stopped")
+   try:
+      server.serve_forever()
+   except KeyboardInterrupt:
+      pass
+   finally:   
+      server.server_close()
+      webservers.remove(server)
+      eprint("Web Server stopped")
 
 def event(thread):
 # This thread is only receiving events
@@ -413,6 +485,8 @@ class myThread (threading.Thread):
       return
    def sendevent(self, tohost, tosock, event):
       print("FROM=%s-%s TO=%s-%s EVENT=%s" % (hostname, self.name, tohost, tosock, event), flush=True)
+   def broadcastevent(self, tosock, event):
+      print("FROM=%s-%s TO=%s-%s EVENT=%s" % (hostname, self.name, "broadcast", tosock, event), flush=True)
       return
    def fakeevent(self, fromsock, tohost, tosock, event):
       print("FROM=%s-%s TO=%s-%s EVENT=%s" % (hostname, fromsock, tohost, tosock, event), flush=True)
@@ -507,4 +581,27 @@ sys.exit()
 #	 * <Channel Number>,<PHY Type>[,<hexdump of Optional Subelements>]
 #	 */
 
+#  <BSSID Information> = 0x0000
 
+#		val = strtol(pos, &endptr, 0);
+#		*nei_pos++ = atoi(pos); /* Operating Class */
+#		*nei_pos++ = atoi(pos); /* Channel Number */
+#		*nei_pos++ = atoi(pos); /* PHY Type */
+# atoi -> decimal  (base 10)
+
+#	/*
+#	 * Neighbor Report element size = BSSID + BSSID info + op_class + chan +
+#	 * phy type + wide bandwidth channel subelement.
+#	 */
+#	nr = wpabuf_alloc(ETH_ALEN + 4 + 1 + 1 + 1 + 5);
+#  0	wpabuf_put_data(nr, hapd->own_addr, ETH_ALEN);
+#  6	wpabuf_put_le32(nr, bssid_info);
+# 10	wpabuf_put_u8(nr, op_class);
+# 11	wpabuf_put_u8(nr, channel);
+# 12	wpabuf_put_u8(nr, ieee80211_get_phy_type(hapd->iface->freq, ht, vht));
+# 13	wpabuf_put_u8(nr, WNM_NEIGHBOR_WIDE_BW_CHAN);
+# 14	wpabuf_put_u8(nr, 3);
+# 15	wpabuf_put_u8(nr, width);
+# 16	wpabuf_put_u8(nr, center_freq1_idx);
+# 17	wpabuf_put_u8(nr, center_freq2_idx);
+# 18

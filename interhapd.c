@@ -390,6 +390,7 @@ void node_remove(addr_node_t *a) {
         if (waitpid(a->pidsh, NULL, WNOHANG) > 0) break;
         usleep(100000);
       } // wait for a maximum of 5 seconds
+      kill(a->pidsh, SIGINT);
       if (a->stdinprocess != NULL) fclose(a->stdinprocess);
       break;
   }
