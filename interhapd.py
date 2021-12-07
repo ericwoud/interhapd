@@ -10,6 +10,10 @@ import datetime
 import binascii
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+#  File "/root/interhapd/./interhapd.py", line 364, in neighborhood
+#    if dic["bssid"] == words[0]: continue # Remove all but my own entry
+#IndexError: list index out of range
+
 hostname = socket.gethostname()
 remotehostsD = {}
 interfacesD = {}
@@ -152,23 +156,30 @@ class MyServer(BaseHTTPRequestHandler):
               else:
                  text = "MOVE"
                  key = s + "-" + n
+# 10	wpabuf_put_u8(nr, op_class);
+# 11	wpabuf_put_u8(nr, channel);
+# 12	wpabuf_put_u8(nr, ieee80211_get_phy_type(hapd->iface->freq, ht, vht));
+                 nr = ndic["nr"]
+                 op = int(nr[20:22], 16)
+                 ch = int(nr[22:24], 16)
+                 ph = int(nr[24:26], 16)
                  if key in beaconrespD.keys(): text = beaconrespD[key]["rssi"]
-                 dic[n] = '''<A HREF=t?tm-%s-%s-%s-%s>%s</A>''' % \
-                    (sdic["host"], sdic["sock"], s, n, text)
+                 dic[n] = '''<A HREF=t?tm-%s-%s-%s-%s,0x0000,%s,%s,%s>%s</A>''' % \
+                    (sdic["host"], sdic["sock"], s, n, op, ch, ph, text)
            tdic[s] = dic
          path = self.path[2:]
          if path.startswith( "?tm-" ):
             tm = path[4:].split("-")
 #            bss_tm_req AA:AA:AA:AA:AA:AA neighbor=-BB:BB:BB:BB:BB:BB abridged=1
-            com = "BSS_TM_REQ %s neighbor=%s,0x0000,81,7,7 abridged=1" %(tm[2], tm[3])
+            com = "BSS_TM_REQ %s neighbor=%s pref=1 abridged=1" %(tm[2], tm[3])
             eprint("TRANSISTION: %s\n%s" % (tm, com))
             il = self.server.thread.docommand(tm[0], tm[1], com)
-            eprint("TRANSISTION RESPONSE: %s" % (il.remain))
+            if il != None: eprint("TRANSISTION RESPONSE: %s" % (il.remain))
 
          table = self.dict2table(tdic, stalist, staname)
          footer = "Transistion: %s" % tdic
       else:
-         footer= ""
+         footer= "Remote Hosts: %s" % remotehostsD
          table = ""
          testD = {
             "test1": {'host':"testhost1",'sock':'testsock1'}, \
@@ -232,11 +243,15 @@ def event(thread):
             threadsD[stations.__name__].signal(il)
          elif words[0] == "BEACON-RESP-RX":
             threadsD[beacons.__name__].signal(il)
+         elif words[0] == "BSS-TM-RESP":
+            eprint("BSS-TM-RESP: %s-%s %s" % (il.fromhost, il.fromsock, il.remain))
       elif il.remain.startswith("INTERHAPD LISTENING STARTED"):
          thread.remotehost_add(il)
+         threadsD[neighborhood.__name__].signal(il)
          eprint("REMOTEHOSTS: %s %s" %(remotehostsD, il.remain))
       elif il.remain.startswith("INTERHAPD LISTENING STOPPED"):
          thread.remotehost_remove(il.fromhost)
+         threadsD[neighborhood.__name__].signal(il)
          eprint("REMOTEHOSTS: %s %s" %(remotehostsD, il.remain))
       elif il.remain.startswith("INTERHAPD INTERFACE STARTED"):
          threadsD[neighborhood.__name__].signal(il)
@@ -246,6 +261,9 @@ def event(thread):
          threadsD[stations.__name__].signal(il)
       elif il.remain.startswith("INTERHAPD NEIGHBORHOOD CHANGED"):
          threadsD[neighborhood.__name__].signal(il)
+#      else:
+#        eprint("OTHER EVENT: %s-%s %s" % (il.fromhost, il.fromsock, il.remain))
+
 
 def command(thread):
 # This thread is only receiving events
@@ -333,7 +351,6 @@ def neighborhood(thread):
       if il != None: # Wait was interupted by a signal from other thread
 #         eprint("%s signal from %s-%s: %s" % (thread.name, il.fromhost, il.fromsock, il.remain))
          if il.remain.startswith("INTERHAPD INTERFACE STARTED"):
-            thread.sendeventall("event", "INTERHAPD NEIGHBORHOOD CHANGED")
             ill = thread.docommand( il.fromhost, il.fromsock, "GET_CONFIG")
             if ill == None: continue
             if not "=" in ill.remain: continue # empty
@@ -347,10 +364,11 @@ def neighborhood(thread):
                   if   word.startswith("ssid="): dic["neighbor_ssid"] = word.lstrip("ssid=")
                   elif word.startswith("nr="):   dic["neighbor_nr"]   = word.lstrip("nr=")
             interfacesD[il.fromsock] = dic
+            thread.sendeventall("event", "INTERHAPD NEIGHBORHOOD CHANGED")
 #            eprint("INTERFACES %s" % (interfacesD))
          elif il.remain.startswith("INTERHAPD INTERFACE STOPPED"):
-            thread.sendeventall("event","INTERHAPD NEIGHBORHOOD CHANGED")
             interfacesD.pop(il.fromsock, None)
+            thread.sendeventall("event","INTERHAPD NEIGHBORHOOD CHANGED")
       eprint("REBIULDING NEIGHBORHOOD")
 # clear local neighborhood
       neighborsD.clear()
