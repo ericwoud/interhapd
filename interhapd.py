@@ -8,16 +8,30 @@ import sys
 import signal
 import datetime
 import binascii
+import random
+
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 #  File "/root/interhapd/./interhapd.py", line 364, in neighborhood
 #    if dic["bssid"] == words[0]: continue # Remove all but my own entry
 #IndexError: list index out of range
 
+class ThreadSafeDict(dict) :
+    def __init__(self, * p_arg, ** n_arg) :
+        dict.__init__(self, * p_arg, ** n_arg)
+        self._lock = threading.Lock()
+
+    def __enter__(self) :
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, type, value, traceback) :
+        self._lock.release()
+
 hostname = socket.gethostname()
 remotehostsD = {}
 interfacesD = {}
-neighborsD = {}
+neighborsD = ThreadSafeDict()
 beaconrespD = {}
 stationsD = {}
 threadsD = {}
@@ -126,9 +140,10 @@ class MyServer(BaseHTTPRequestHandler):
       return table
    def do_GET(self):
       if self.path == "/n":
-         footer = "Neighbors: %s" % neighborsD
-         table = self.dict2table(neighborsD, ("host", "sock", "ascii_ssid", "key"), \
-                                             ("host", "sock", "ssid",       "bssid"))
+         with neighborsD:
+            footer = "Neighbors: %s" % neighborsD
+            table = self.dict2table(neighborsD, ("host", "sock", "ascii_ssid", "key"), \
+                                                ("host", "sock", "ssid",       "bssid"))
       elif self.path == "/s":
          footer = "Stations: %s" % stationsD
          table = self.dict2table(stationsD, ("key", "host", "sock"), \
@@ -144,34 +159,31 @@ class MyServer(BaseHTTPRequestHandler):
       elif self.path.startswith("/t"):
          stalist = ["key"]
          staname = ["Station bssid"]
-         for n, ndic in neighborsD.items():
-            stalist.append(n)
-            staname.append(ndic["host"] + "<p></p>" + ndic["sock"]+ "<p></p>" + ndic["ascii_ssid"])
-         tdic = dict()
-         for s, sdic in stationsD.items():
-           dic = dict()
-           for n, ndic in neighborsD.items():
-              if sdic["host"] == ndic["host"] and sdic["sock"] == ndic["sock"]:
-                 dic[n] = "CONNECTED"
-              else:
-                 text = "MOVE"
-                 key = s + "-" + n
-# 10	wpabuf_put_u8(nr, op_class);
-# 11	wpabuf_put_u8(nr, channel);
-# 12	wpabuf_put_u8(nr, ieee80211_get_phy_type(hapd->iface->freq, ht, vht));
-                 nr = ndic["nr"]
-                 op = int(nr[20:22], 16)
-                 ch = int(nr[22:24], 16)
-                 ph = int(nr[24:26], 16)
-                 if key in beaconrespD.keys(): text = beaconrespD[key]["rssi"]
-                 dic[n] = '''<A HREF=t?tm-%s-%s-%s-%s,0x0000,%s,%s,%s>%s</A>''' % \
-                    (sdic["host"], sdic["sock"], s, n, op, ch, ph, text)
-           tdic[s] = dic
+         with neighborsD:
+            for n, ndic in neighborsD.items():
+               stalist.append(n)
+               staname.append(ndic["host"] + "<p></p>" + ndic["sock"]+ "<p></p>" + ndic["ascii_ssid"])
+            tdic = dict()
+            for s, sdic in stationsD.items():
+               dic = dict()
+               for n, ndic in neighborsD.items():
+                  if sdic["host"] == ndic["host"] and sdic["sock"] == ndic["sock"]:
+                     dic[n] = "CONNECTED"
+                  else:
+                     text = "MOVE"
+                     key = s + "-" + n
+                     nr = ndic["nr"]
+                     op = int(nr[20:22], 16)
+                     ch = int(nr[22:24], 16)
+                     ph = int(nr[24:26], 16)
+                     if key in beaconrespD.keys(): text = beaconrespD[key]["rssi"]
+                     dic[n] = '''<A HREF=t?tm-%s-%s-%s-%s,0x0000,%s,%s,%s,0301ff>%s</A>''' % \
+                       (sdic["host"], sdic["sock"], s, n, op, ch, ph, text)
+               tdic[s] = dic
          path = self.path[2:]
          if path.startswith( "?tm-" ):
             tm = path[4:].split("-")
-#            bss_tm_req AA:AA:AA:AA:AA:AA neighbor=-BB:BB:BB:BB:BB:BB abridged=1
-            com = "BSS_TM_REQ %s neighbor=%s pref=1 abridged=1" %(tm[2], tm[3])
+            com = "BSS_TM_REQ %s pref=1 abriged=1 disassoc_imminent=1 disassoc_timer=10 neighbor=%s" %(tm[2], tm[3])
             eprint("TRANSISTION: %s\n%s" % (tm, com))
             il = self.server.thread.docommand(tm[0], tm[1], com)
             if il != None: eprint("TRANSISTION RESPONSE: %s" % (il.remain))
@@ -244,14 +256,16 @@ def event(thread):
          elif words[0] == "BEACON-RESP-RX":
             threadsD[beacons.__name__].signal(il)
          elif words[0] == "BSS-TM-RESP":
-            eprint("BSS-TM-RESP: %s-%s %s" % (il.fromhost, il.fromsock, il.remain))
+            pass
       elif il.remain.startswith("INTERHAPD LISTENING STARTED"):
          thread.remotehost_add(il)
          threadsD[neighborhood.__name__].signal(il)
+         threadsD[stations.__name__].signal(il)
          eprint("REMOTEHOSTS: %s %s" %(remotehostsD, il.remain))
       elif il.remain.startswith("INTERHAPD LISTENING STOPPED"):
          thread.remotehost_remove(il.fromhost)
          threadsD[neighborhood.__name__].signal(il)
+         threadsD[stations.__name__].signal(il)
          eprint("REMOTEHOSTS: %s %s" %(remotehostsD, il.remain))
       elif il.remain.startswith("INTERHAPD INTERFACE STARTED"):
          threadsD[neighborhood.__name__].signal(il)
@@ -270,12 +284,9 @@ def command(thread):
    while  True:
       il = thread.getinput(None)
       if il == None: continue
-#      eprint("%s processing %s" % (thread.name, il.remain))
       if il.remain.startswith("SHOW_MY_NEIGHBOR"):
+         eprint("ERIC: %s" % il.fromhost)
          thread.respond( il.fromhost, il.fromsock, thread.get_my_neighbors())
-
-# <3>BEACON-RESP-RX e0:cc:f8:57:68:60 64 00 51060000000000000000000002cb00aabbcc1573a8006bb78403
-#51060000000000000000000002bf00aabbcc1573a80038c5a303016495a1ba9f00000000640011140006574946493234010882848b960c1218240301060504000200002a010432043048606c30180100000fac040100000fac040200000fac02000fac040000460572000000003603e1cd013b0251007f080400080200000040
 
 def beacons(thread):
 # This thread is only sending commands
@@ -321,7 +332,10 @@ def stations(thread):
             if   words[0] == "AP-STA-CONNECTED": 
                sta = thread.add_station(words[1], il)
             elif words[0] == "AP-STA-DISCONNECTED":
-               stationsD.pop(words[1], None)
+               sta = words[1]
+               if sta in stationsD.keys():
+                  if stationsD[sta]["host"] == il.fromhost and stationsD[sta]["sock"] == il.fromsock:
+                     stationsD.pop(sta, None)
          elif il.remain.startswith("INTERHAPD INTERFACE STARTED"):
             ill = thread.docommand( il.fromhost, il.fromsock, "STA-FIRST")
             if ill == None: continue
@@ -337,11 +351,27 @@ def stations(thread):
                removed = False
                for sta, dic in stationsD.items():
                   if stationsD[sta]["sock"] != il.fromsock: continue
+                  if stationsD[sta]["host"] != hostname: continue
                   stationsD.pop(sta, None)
                   thread.fakeeventall(il.fromsock, "event", "<3>AP-STA-DISCONNECTED %s" % sta)
                   removed = True
                   break
                if removed == False: break
+         elif il.remain.startswith("INTERHAPD LISTENING STARTED"):
+            if il.fromhost != hostname:
+               for sta, dic in stationsD.items():
+                  if stationsD[sta]["host"] != hostname: continue
+                  thread.fakeeventall(stationsD[sta]["sock"], "event", "<3>AP-STA-CONNECTED %s" % sta)
+         elif il.remain.startswith("INTERHAPD LISTENING STOPPED"):
+            while il.fromhost != hostname:
+               removed = False
+               for sta, dic in stationsD.items():
+                  if stationsD[sta]["host"] != hostname: continue
+                  stationsD.pop(sta, None)
+                  removed = True
+                  break
+               if removed == False: break
+                  
 
 def neighborhood(thread):
 # This thread is only sending commands
@@ -371,30 +401,33 @@ def neighborhood(thread):
             thread.sendeventall("event","INTERHAPD NEIGHBORHOOD CHANGED")
       eprint("REBIULDING NEIGHBORHOOD")
 # clear local neighborhood
-      neighborsD.clear()
-      for interface, dic in interfacesD.items():
-         il = thread.docommand(hostname, interface, "SHOW_NEIGHBOR")
-         if il == None: continue
-         for line in il.remain.rstrip('^').split("^"):
-            words = line.split()
-            if dic["bssid"] == words[0]: continue # Remove all but my own entry
-            thread.docommand(hostname, interface, "REMOVE_NEIGHBOR " + words[0])
+      with neighborsD:
+         neighborsD.clear()
+         for interface, dic in interfacesD.items():
+            il = thread.docommand(hostname, interface, "SHOW_NEIGHBOR")
+            if il == None: continue
+            for line in il.remain.rstrip('^').split("^"):
+               words = line.split()
+               if len(words) == 0: continue
+               if dic["bssid"] == words[0]: continue # Remove all but my own entry
+               thread.docommand(hostname, interface, "REMOVE_NEIGHBOR " + words[0])
 # build up neigborhood on local interfacesD
-      while True:
-         removed = False
-         for host, hdic in remotehostsD.items():
-            age = datetime.datetime.now() - hdic["lastseen"]
-            if age < datetime.timedelta(minutes = 10): continue
+         while True:
+            removed = False
+            for host, hdic in remotehostsD.items():
+               age = datetime.datetime.now() - hdic["lastseen"]
+               if age < datetime.timedelta(minutes = 10): continue
 ##### FIX!!!
-#            thread.remotehost_remove(host)
-            removed = True
-            break
-         if removed == False: break
-      for host, hdic in remotehostsD.items():
-         il = thread.docommand(host, "command", "SHOW_MY_NEIGHBOR")
-         if il == None: continue
-         thread.set_my_neighbors(il.remain)
-      thread.set_my_neighbors(thread.get_my_neighbors())
+#               thread.remotehost_remove(host)
+               removed = True
+               break
+            if removed == False: break
+         for host, hdic in remotehostsD.items():
+            il = thread.docommand(host, "command", "SHOW_MY_NEIGHBOR")
+            if il == None: continue
+            eprint("TEST %s" % il.remain)
+            thread.set_my_neighbors(il.remain)
+         thread.set_my_neighbors(thread.get_my_neighbors())
 
 threadfunctionList = [event, command, stations, neighborhood, beacons, server]
 
@@ -457,7 +490,9 @@ class myLine:
             partpartpart = partpart[2].partition('-')
             self.tohost=partpartpart[0]
             self.tosock=partpartpart[2]
-         elif partpart[0] == "COMMAND" or partpart[0] == "RESPONSE" or partpart[0] == "EVENT":
+         elif partpart[0].startswith("COMMAND") \
+           or partpart[0].startswith("RESPONSE") \
+           or partpart[0].startswith("EVENT"):
             self.mytype = partpart[0]
             self.remain = partpart[2]
             if part[2] != "": self.remain += " " + part[2]
@@ -473,25 +508,31 @@ class myThread (threading.Thread):
       self.sleepq = queue.Queue()
    def run(self):
       threadfunctionList[self.threadID] (self)
+   def get(self, timeout, q):
+      try:
+         while True:
+            ret = q.get(block=True, timeout=timeout)
+            if ret == "EXIT!": sys.exit()
+            if scriptexiting: sys.exit()
+            else: return ret 
+      except queue.Empty: 
+         return None
    def getinput(self, timeout):
-      try: 
-         ret = self.inputq.get(block=True, timeout=timeout)
-         if ret == "EXIT!": sys.exit()
-         if scriptexiting: sys.exit()
-         else: return ret 
-      except queue.Empty: 
-         return None
+      return self.get(timeout, self.inputq)
    def wait(self, timeout):
-      try: 
-         ret = self.sleepq.get(block=True, timeout=timeout)
-         if ret == "EXIT!": sys.exit()
-         if scriptexiting: sys.exit()
-         else: return ret
-      except queue.Empty: 
-         return None
+      return self.get(timeout, self.sleepq)
    def docommand(self, tohost, tosock, command):
-      print("FROM=%s-%s TO=%s-%s COMMAND=%s" % (hostname, self.name, tohost, tosock, command), flush=True)
-      return self.getinput(1)
+      hsh = "%08x" % random.getrandbits(32)
+      print("FROM=%s-%s TO=%s-%s COMMAND-%s=%s" % (hostname, self.name, tohost, tosock, hsh, command), flush=True)
+      i = 0
+      while True:
+         if i > 10: return None
+         ret = self.getinput(1)
+         if ret == None: return ret
+         part = ret.mytype.partition('-')
+#         eprint("hash value: %s %s" % (hsh, part[2]))
+         if hsh == part[2]: return ret
+         i += 1
    def repeatcommand(self, tohost, tosock, command, repeatstring):
       while True:
          ret = self.docommand(tohost, tosock, command)

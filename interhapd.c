@@ -112,7 +112,7 @@ typedef struct myline {
     char * tosock;
     char * mytype;
     char * remain;
-    char line[STRINGSIZE];
+    char line[STRINGSIZE*4];
 } myline_t;
 
 int debugprintf(int level, const char *fmt, ...)
@@ -194,9 +194,9 @@ void send2script(addr_node_t * a, const char *fromhost, const char *fromsock,
                                   const char *tohost, const char *tosock, 
                                   const char *mytype, const char *remain) {
   char s[STRINGSIZE*2], r[STRINGSIZE];
-  strncpy(r, remain, STRINGSIZE-1); r[STRINGSIZE-1] = 0;
+  strncpy(r, remain, sizeof(r)-1); r[sizeof(r)-1] = 0;
   for(int i=0;r[i]!='\0';i++) if(r[i]=='\n') r[i] = '^';
-  snprintf(s, STRINGSIZE*2 -3,  "FROM=%s-%s TO=%s-%s %s=%s", 
+  snprintf(s, sizeof(s) -3,  "FROM=%s-%s TO=%s-%s %s=%s", 
         fromhost, fromsock, tohost, tosock, mytype, r);      // make sure there are 3 bytes left
   if ((a == NULL) || (strcmp(tohost, "broadcast") == 0)) {
     for (addr_node_t *aa = threadlist; aa; aa = aa->next)
@@ -487,7 +487,7 @@ void partition(char **p, char *string, char chr)
 void myline_f(myline_t * il, const char *line)
 {
   char * part[3];
-  strncpy(il->line, line, STRINGSIZE-1);
+  strncpy(il->line, line, sizeof(il->line)-1);
   partition(part, il->line, ' ');
   while (part[0] != NULL) {
     char * partpart[3], * partpartpart[3];
@@ -502,8 +502,9 @@ void myline_f(myline_t * il, const char *line)
       il->tohost=partpartpart[0];
       il->tosock=partpartpart[2];
     }  
-    else if ((strcmp(partpart[0], "COMMAND") == 0) || (strcmp(partpart[0], "RESPONSE") == 0) 
-          || (strcmp(partpart[0], "EVENT") == 0)) {
+    else if ((strncmp(partpart[0], "COMMAND",  strlen("COMMAND")) == 0) 
+          || (strncmp(partpart[0], "RESPONSE", strlen("RESPONSE")) == 0) 
+          || (strncmp(partpart[0], "EVENT",    strlen("EVENT")) == 0)) {
       il->mytype=partpart[0];
       il->remain=partpart[2];
       if (part[1] != NULL) part[1][0] = ' ' ; // \0 back to space
@@ -580,6 +581,10 @@ void process_netlink() {
 
 void process_myline(myline_t * il, addr_node_t *a)
 {
+  char * id = "";
+  char response[STRINGSIZE];
+  if (strncmp(il->mytype, "COMMAND",  strlen("COMMAND")) == 0) id = il->mytype + strlen("COMMAND");
+  snprintf(response, sizeof(response), "RESPONSE%s", id);
   // *** Do some processing for use in interhapd internally ***
   if (legacyfdb)
     if ( (strstr(il->remain, ">AP-STA-CONNECTED ") != NULL) 
@@ -594,26 +599,26 @@ void process_myline(myline_t * il, addr_node_t *a)
     if (toa != NULL) {
       if (toa->type == NODE_HOSTAPD) { // *** To local hostapd ***
         int recsize;
-        char tempbuff[STRINGSIZE];
+        char tempbuff[STRINGSIZE*4];
         char * part[3];
         partition(part, il->remain, '\n');
 //          debugprintf(2, "***%s***\n", part[0]);
         send(toa->synchrfd, part[0], strlen(part[0]), 0);
         if ((recsize=recv(toa->synchrfd, tempbuff, sizeof(tempbuff)-1, 0)) >= 0) {  // flags ???
           tempbuff[recsize] = '\0';
-          send2script(fromhosta, hostname, toa->name, il->fromhost, il->fromsock, "RESPONSE", tempbuff);
+          send2script(fromhosta, hostname, toa->name, il->fromhost, il->fromsock, response, tempbuff);
 //          debugprintf(2, "***%s***\n", tempbuff);
         } 
       }
     } else {  // *** Unknow tosock, could be interhapd command or directed to local script ***
       if (strncmp(il->remain, ihapd_list_interfaces, strlen(ihapd_list_interfaces)) ==0) {
-        char tempbuff[STRINGSIZE];
+        char tempbuff[STRINGSIZE*4];
         tempbuff[0] = 0;
         int length = 0;
         for (addr_node_t *tempa = threadlist; tempa; tempa = tempa->next)
           if (tempa->type==NODE_HOSTAPD)
-            length += snprintf(tempbuff+length, STRINGSIZE-length, "%s ", tempa->name);
-        send2script(fromhosta, hostname, il->tosock, il->fromhost, il->fromsock, "RESPONSE", tempbuff);
+            length += snprintf(tempbuff+length, sizeof(tempbuff)-length, "%s ", tempa->name);
+        send2script(fromhosta, hostname, il->tosock, il->fromhost, il->fromsock, response, tempbuff);
       }
       else {  // *** To local script ***
         toa = node_from_name(hostname);
@@ -757,7 +762,7 @@ void mkdirp(char* dirpath) {
   char s[STRINGSIZE];
   int len=strlen(dirpath), i=0;
   while (len > 0) {
-    snprintf(s, STRINGSIZE-1, "%s/", dirpath);
+    snprintf(s, sizeof(s)-1, "%s/", dirpath);
     while ( (path= strrchr(s, '/')) != NULL) {
       len = path - s;
       s[len] = 0;
@@ -817,7 +822,7 @@ int main(int argc, char *argv[])
   }
   if (runhostapdpath[0] != '/') debugprintf(LEVEL_EXIT, "Option '-h %s' is not an absolute path\n", runhostapdpath );
   if (runhostapdpath[strlen(runhostapdpath)-1] == '/') runhostapdpath[strlen(runhostapdpath)-1] = 0;
-  strncpy(runpath, runhostapdpath, STRINGSIZE-1); 
+  strncpy(runpath, runhostapdpath, sizeof(runpath)-1); 
   runpath[strrchr(runhostapdpath, '/') - runhostapdpath] = 0; // there is always at least one '/'
   mkdirp(runpath);
 
